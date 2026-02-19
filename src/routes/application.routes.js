@@ -3,6 +3,7 @@ import {
   applyJob,
   getMyApplications,
   getApplicantsForJob,
+  getEmployerApplications,
   updateApplicationStatus,
 } from "../controllers/application.controller.js";
 
@@ -20,11 +21,13 @@ router.post(
   applyJob
 );
 
+router.get("/my", protect, authorizeRoles("jobseeker"), getMyApplications);
+
 router.get(
-  "/my",
+  "/employer",
   protect,
-  authorizeRoles("jobseeker"),
-  getMyApplications
+  authorizeRoles("employer"),
+  getEmployerApplications
 );
 
 router.get(
