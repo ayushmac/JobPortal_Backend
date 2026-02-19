@@ -2,6 +2,12 @@ import Application from "../models/Application.js";
 import Job from "../models/Job.js";
 import mongoose from "mongoose";
 
+const parsePagination = (query) => {
+  const page = Math.max(Number(query.page) || 1, 1);
+  const limit = Math.min(Math.max(Number(query.limit) || 10, 1), 100);
+
+  return { page, limit, skip: (page - 1) * limit };
+};
 
 // APPLY FOR JOB (Jobseeker only)
 export const applyJob = async (req, res) => {
@@ -18,16 +24,13 @@ export const applyJob = async (req, res) => {
       return res.status(404).json({ message: "Job not found" });
     }
 
-    // Prevent duplicate application
     const existingApplication = await Application.findOne({
       job: jobId,
       applicant: req.user._id,
     });
 
     if (existingApplication) {
-      return res
-        .status(400)
-        .json({ message: "Already applied for this job" });
+      return res.status(400).json({ message: "Already applied for this job" });
     }
 
     if (!req.file) {
@@ -46,29 +49,55 @@ export const applyJob = async (req, res) => {
   }
 };
 
-
-
 // GET MY APPLICATIONS (Jobseeker)
 export const getMyApplications = async (req, res) => {
   try {
-    const applications = await Application.find({
-      applicant: req.user._id,
-    })
-      .populate("job", "title company location")
-      .sort({ createdAt: -1 });
+    const { page, limit, skip } = parsePagination(req.query);
+    const { status, keyword } = req.query;
 
-    res.json(applications);
+    const query = { applicant: req.user._id };
+
+    if (status) query.status = status;
+
+    const applications = await Application.find(query)
+      .populate({
+        path: "job",
+        select: "title company location",
+        match: keyword
+          ? {
+              $or: [
+                { title: { $regex: keyword, $options: "i" } },
+                { company: { $regex: keyword, $options: "i" } },
+              ],
+            }
+          : {},
+      })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const filteredApplications = applications.filter((a) => a.job);
+
+    const total = await Application.countDocuments(query);
+
+    res.json({
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      applications: filteredApplications,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
-
-
 // GET APPLICANTS FOR A JOB (Employer only)
 export const getApplicantsForJob = async (req, res) => {
   try {
     const { jobId } = req.params;
+    const { page, limit, skip } = parsePagination(req.query);
+    const { status, keyword } = req.query;
 
     const job = await Job.findById(jobId);
 
@@ -76,22 +105,91 @@ export const getApplicantsForJob = async (req, res) => {
       return res.status(404).json({ message: "Job not found" });
     }
 
-    // Only job owner can view applicants
     if (job.employer.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: "Not authorized" });
     }
 
-    const applications = await Application.find({ job: jobId })
-      .populate("applicant", "name email")
-      .sort({ createdAt: -1 });
+    const query = { job: jobId };
+    if (status) query.status = status;
 
-    res.json(applications);
+    const applications = await Application.find(query)
+      .populate({
+        path: "applicant",
+        select: "name email",
+        match: keyword
+          ? {
+              $or: [
+                { name: { $regex: keyword, $options: "i" } },
+                { email: { $regex: keyword, $options: "i" } },
+              ],
+            }
+          : {},
+      })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const filteredApplications = applications.filter((a) => a.applicant);
+    const total = await Application.countDocuments(query);
+
+    res.json({
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      applications: filteredApplications,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
+// GET MY JOB APPLICANTS (Employer dashboard)
+export const getEmployerApplications = async (req, res) => {
+  try {
+    const { page, limit, skip } = parsePagination(req.query);
+    const { status, jobId, keyword } = req.query;
 
+    const employerJobs = await Job.find({ employer: req.user._id }).select("_id");
+    const jobIds = employerJobs.map((job) => job._id);
+
+    const query = { job: { $in: jobIds } };
+
+    if (status) query.status = status;
+    if (jobId) query.job = jobId;
+
+    const applications = await Application.find(query)
+      .populate({
+        path: "applicant",
+        select: "name email",
+        match: keyword
+          ? {
+              $or: [
+                { name: { $regex: keyword, $options: "i" } },
+                { email: { $regex: keyword, $options: "i" } },
+              ],
+            }
+          : {},
+      })
+      .populate("job", "title company location")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const filteredApplications = applications.filter((a) => a.applicant);
+    const total = await Application.countDocuments(query);
+
+    res.json({
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      applications: filteredApplications,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
 
 // UPDATE APPLICATION STATUS (Employer only)
 export const updateApplicationStatus = async (req, res) => {
@@ -99,7 +197,7 @@ export const updateApplicationStatus = async (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
 
-    if (!["accepted", "rejected"].includes(status)) {
+    if (!["accepted", "rejected", "pending"].includes(status)) {
       return res.status(400).json({ message: "Invalid status" });
     }
 
@@ -109,9 +207,7 @@ export const updateApplicationStatus = async (req, res) => {
       return res.status(404).json({ message: "Application not found" });
     }
 
-    if (
-      application.job.employer.toString() !== req.user._id.toString()
-    ) {
+    if (application.job.employer.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: "Not authorized" });
     }
 

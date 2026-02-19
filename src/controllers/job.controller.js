@@ -1,6 +1,12 @@
 import Job from "../models/Job.js";
 import { createJobSchema } from "../validators/job.schema.js";
 
+const parsePagination = (query) => {
+  const page = Math.max(Number(query.page) || 1, 1);
+  const limit = Math.min(Math.max(Number(query.limit) || 10, 1), 100);
+
+  return { page, limit, skip: (page - 1) * limit };
+};
 
 // CREATE JOB (Employer only)
 export const createJob = async (req, res) => {
@@ -18,33 +24,48 @@ export const createJob = async (req, res) => {
   }
 };
 
-
 // GET ALL JOBS (Public with pagination + filtering)
 export const getJobs = async (req, res) => {
   try {
-    const { page = 1, limit = 10, location, keyword } = req.query;
+    const { page, limit, skip } = parsePagination(req.query);
+    const { location, keyword, company, minSalary, maxSalary } = req.query;
 
     const query = {};
 
     if (location) {
-      query.location = location;
+      query.location = { $regex: location, $options: "i" };
+    }
+
+    if (company) {
+      query.company = { $regex: company, $options: "i" };
     }
 
     if (keyword) {
-      query.title = { $regex: keyword, $options: "i" };
+      query.$or = [
+        { title: { $regex: keyword, $options: "i" } },
+        { description: { $regex: keyword, $options: "i" } },
+      ];
+    }
+
+    if (minSalary || maxSalary) {
+      query.salary = {};
+      if (minSalary) query.salary.$gte = Number(minSalary);
+      if (maxSalary) query.salary.$lte = Number(maxSalary);
     }
 
     const jobs = await Job.find(query)
       .populate("employer", "name email")
-      .skip((page - 1) * limit)
-      .limit(Number(limit))
+      .skip(skip)
+      .limit(limit)
       .sort({ createdAt: -1 });
 
     const total = await Job.countDocuments(query);
 
     res.json({
       total,
-      page: Number(page),
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
       jobs,
     });
   } catch (error) {
@@ -52,6 +73,43 @@ export const getJobs = async (req, res) => {
   }
 };
 
+// GET EMPLOYER JOBS (Employer dashboard)
+export const getEmployerJobs = async (req, res) => {
+  try {
+    const { page, limit, skip } = parsePagination(req.query);
+    const { keyword, location } = req.query;
+
+    const query = { employer: req.user._id };
+
+    if (location) {
+      query.location = { $regex: location, $options: "i" };
+    }
+
+    if (keyword) {
+      query.$or = [
+        { title: { $regex: keyword, $options: "i" } },
+        { company: { $regex: keyword, $options: "i" } },
+      ];
+    }
+
+    const jobs = await Job.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Job.countDocuments(query);
+
+    res.json({
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      jobs,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
 
 // GET SINGLE JOB
 export const getJobById = async (req, res) => {
@@ -70,7 +128,6 @@ export const getJobById = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
-
 
 // UPDATE JOB (Owner only)
 export const updateJob = async (req, res) => {
@@ -94,7 +151,6 @@ export const updateJob = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
-
 
 // DELETE JOB (Owner or Superadmin)
 export const deleteJob = async (req, res) => {
