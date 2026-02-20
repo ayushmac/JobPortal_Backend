@@ -1,7 +1,6 @@
 import bcrypt from "bcrypt";
 import fs from "fs/promises";
 import path from "path";
-import mongoose from "mongoose";
 import User from "../models/User.js";
 import Job from "../models/Job.js";
 import Application from "../models/Application.js";
@@ -15,13 +14,12 @@ const parsePagination = (query) => {
 
 const removeResumeFiles = async (applications) => {
   const deletedResumePaths = new Set();
-  const resumesDir = path.resolve(process.cwd(), "uploads/resumes");
 
   for (const application of applications) {
     if (!application.resume) continue;
 
-    const resumeFileName = path.basename(application.resume);
-    const absolutePath = path.join(resumesDir, resumeFileName);
+    const relativePath = application.resume.replace(/^\/+/, "");
+    const absolutePath = path.resolve(process.cwd(), relativePath);
 
     if (deletedResumePaths.has(absolutePath)) continue;
 
