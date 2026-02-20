@@ -1,4 +1,7 @@
 import bcrypt from "bcrypt";
+import fs from "fs/promises";
+import path from "path";
+import mongoose from "mongoose";
 import User from "../models/User.js";
 import Job from "../models/Job.js";
 import Application from "../models/Application.js";
@@ -8,6 +11,27 @@ const parsePagination = (query) => {
   const limit = Math.min(Math.max(Number(query.limit) || 10, 1), 100);
 
   return { page, limit, skip: (page - 1) * limit };
+};
+
+const removeResumeFiles = async (applications) => {
+  const deletedResumePaths = new Set();
+  const resumesDir = path.resolve(process.cwd(), "uploads/resumes");
+
+  for (const application of applications) {
+    if (!application.resume) continue;
+
+    const resumeFileName = path.basename(application.resume);
+    const absolutePath = path.join(resumesDir, resumeFileName);
+
+    if (deletedResumePaths.has(absolutePath)) continue;
+
+    try {
+      await fs.unlink(absolutePath);
+      deletedResumePaths.add(absolutePath);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
 };
 
 // GET ALL USERS
@@ -131,15 +155,40 @@ export const updateUser = async (req, res) => {
 // DELETE USER
 export const deleteUser = async (req, res) => {
   try {
-    const user = await User.findById(req.params.id);
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid user ID" });
+    }
+
+    const user = await User.findById(id);
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
+    const jobs = await Job.find({ employer: user._id }).select("_id");
+    const jobIds = jobs.map((job) => job._id);
+
+    const applicationsToDelete = await Application.find({
+      $or: [{ applicant: user._id }, { job: { $in: jobIds } }],
+    }).select("resume");
+
+    await removeResumeFiles(applicationsToDelete);
+
+    await Application.deleteMany({
+      $or: [{ applicant: user._id }, { job: { $in: jobIds } }],
+    });
+
+    await Job.deleteMany({ employer: user._id });
+
     await user.deleteOne();
 
-    res.json({ message: "User deleted successfully" });
+    res.json({
+      message: "User and related data deleted successfully",
+      deletedJobs: jobIds.length,
+      deletedApplications: applicationsToDelete.length,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

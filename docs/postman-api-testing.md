@@ -108,7 +108,7 @@ This guide is written so you can quickly test all APIs in Postman.
 - **Method**: `POST`
 - **URL**: `{{baseUrl}}/api/applications/apply/{{jobId}}`
 - **Body**: `form-data`
-  - key: `resume` (type **File**) -> upload file (pdf/doc)
+  - key: `resume` (type **File**) -> upload file (**PDF only**)
 
 ### Jobseeker: My Applications (with status visibility)
 - **Method**: `GET`
@@ -174,6 +174,20 @@ This guide is written so you can quickly test all APIs in Postman.
 }
 ```
 - `DELETE {{baseUrl}}/api/admin/users/{{userId}}`
+  - Cascade cleanup behavior:
+    - Deletes the user record.
+    - Deletes all jobs created by that user.
+    - Deletes all applications submitted by that user.
+    - Deletes all applications received on jobs created by that user.
+    - Deletes linked resume files from `uploads/resumes` for all removed applications.
+  - Sample success response:
+```json
+{
+  "message": "User and related data deleted successfully",
+  "deletedJobs": 2,
+  "deletedApplications": 5
+}
+```
 
 ### Jobs
 - `GET {{baseUrl}}/api/admin/jobs?page=1&limit=10&location=remote&keyword=frontend&employerId={{userId}}`
