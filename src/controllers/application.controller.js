@@ -156,7 +156,17 @@ export const getEmployerApplications = async (req, res) => {
     const query = { job: { $in: jobIds } };
 
     if (status) query.status = status;
-    if (jobId) query.job = jobId;
+    if (jobId) {
+      const ownsRequestedJob = jobIds.some((id) => id.toString() === jobId);
+
+      if (!ownsRequestedJob) {
+        return res
+          .status(403)
+          .json({ message: "Not authorized to view applications for this job" });
+      }
+
+      query.job = jobId;
+    }
 
     const applications = await Application.find(query)
       .populate({
