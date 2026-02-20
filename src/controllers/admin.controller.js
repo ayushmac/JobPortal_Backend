@@ -1,4 +1,6 @@
 import bcrypt from "bcrypt";
+import fs from "fs/promises";
+import path from "path";
 import User from "../models/User.js";
 import Job from "../models/Job.js";
 import Application from "../models/Application.js";
@@ -8,6 +10,26 @@ const parsePagination = (query) => {
   const limit = Math.min(Math.max(Number(query.limit) || 10, 1), 100);
 
   return { page, limit, skip: (page - 1) * limit };
+};
+
+const removeResumeFiles = async (applications) => {
+  const deletedResumePaths = new Set();
+
+  for (const application of applications) {
+    if (!application.resume) continue;
+
+    const relativePath = application.resume.replace(/^\/+/, "");
+    const absolutePath = path.resolve(process.cwd(), relativePath);
+
+    if (deletedResumePaths.has(absolutePath)) continue;
+
+    try {
+      await fs.unlink(absolutePath);
+      deletedResumePaths.add(absolutePath);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
 };
 
 // GET ALL USERS
@@ -137,9 +159,28 @@ export const deleteUser = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
+    const jobs = await Job.find({ employer: user._id }).select("_id");
+    const jobIds = jobs.map((job) => job._id);
+
+    const applicationsToDelete = await Application.find({
+      $or: [{ applicant: user._id }, { job: { $in: jobIds } }],
+    }).select("resume");
+
+    await removeResumeFiles(applicationsToDelete);
+
+    await Application.deleteMany({
+      $or: [{ applicant: user._id }, { job: { $in: jobIds } }],
+    });
+
+    await Job.deleteMany({ employer: user._id });
+
     await user.deleteOne();
 
-    res.json({ message: "User deleted successfully" });
+    res.json({
+      message: "User and related data deleted successfully",
+      deletedJobs: jobIds.length,
+      deletedApplications: applicationsToDelete.length,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
